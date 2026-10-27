@@ -3,7 +3,9 @@
 # Skrevet i samme stil som OLA 3: pipe |>, dplyr og danske navne uden forkortelser.
 # Kør altid scriptet fra toppen. Opgave 4 bruger data, der hentes i opgave 2.
 # =====================================================================
-
+library(readr)
+newhomes_til_ola_2 <- read_csv("newhomes_til_ola_2.csv")
+View(newhomes_til_ola_2)
 library(dkstat)
 library(tidyverse)   # indeholder dplyr (filter, mutate, group_by ...), tidyr (pivot_wider) og ggplot2
 library(scales)      # label_number() til pæne tal på akserne
