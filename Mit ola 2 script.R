@@ -4,15 +4,25 @@
 # Kør altid scriptet fra toppen. Opgave 4 bruger data, der hentes i opgave 2.
 # =====================================================================
 library(readr)
-newhomes_til_ola_2 <- read_csv("newhomes_til_ola_2.csv")
+newhomes_til_ola_2 <- read_csv("newhomes_til_ola_2.csv")   # boligdata fra Newhomes (bruges i opgave 1.3)
 View(newhomes_til_ola_2)
+
 library(dkstat)
 library(tidyverse)   # indeholder dplyr (filter, mutate, group_by ...), tidyr (pivot_wider) og ggplot2
 library(scales)      # label_number() til pæne tal på akserne
 
+# ---- Datafiler: hentes fra GitHub ned i projektmappen, hvis de ikke allerede ligger der ----
+github_mappe <- "https://raw.githubusercontent.com/Tobifrid/Github-ola-2-til-eksamen/main/"   # mit eget repo
+datafiler    <- c("DST_BY1.csv", "Landekoder.csv", "00_vaelg_lande.R")
+for (fil in datafiler) {                                                               # loop: fil for fil
+  if (!file.exists(fil)) download.file(paste0(github_mappe, fil), destfile = fil, mode = "wb")   # hent kun, hvis filen mangler
+}
+file.exists(datafiler)
+# TRUE TRUE TRUE: alle 3 filer ligger nu i mappen
+
 # ---- Hjælpefunktioner, som bruges flere steder ----
 
-# Laver et bynavn om til samme format som i Boligsidens URL'er, fx "Sønderborg" -> "soenderborg"
+# Laver et bynavn om til samme format i både boligdata og DST-data, fx "Sønderborg" -> "soenderborg"
 til_slug <- function(tekst) {
   tekst <- tolower(tekst)                  # små bogstaver
   tekst <- gsub("æ", "ae", tekst)
@@ -101,17 +111,27 @@ kategori_tabel
 # =====================================================================
 # Opgave 1.3: Merge boligdata (OLA 1) med bycat
 # =====================================================================
-boliger <- read.csv("Boliger_samlet.csv", stringsAsFactors = FALSE, encoding = "UTF-8") |>
-  mutate(by_slug = til_slug(by))   # samme format som DST-byerne, så de kan sættes sammen
+# newhomes_til_ola_2 er indlæst øverst i scriptet. Den er rå tekst, fx pris = "3.200.000 kr.", kvm = "126 m²" og zip = "Vivild, 8961 Allingåbro"
+boliger <- newhomes_til_ola_2 |>
+  filter(!is.na(bolig_id)) |>                                            # fjern tomme rækker
+  distinct(bolig_id, .keep_all = TRUE) |>                                # samme bolig må kun være med én gang
+  mutate(pris    = as.numeric(gsub("[^0-9]", "", pris)),                 # fjern alt der ikke er tal: "3.200.000 kr." -> 3200000
+         kvm     = ifelse(grepl("^[0-9.]+ m", kvm), as.numeric(gsub("[^0-9]", "", kvm)), NA),   # kun rigtige m², fx "126 m²" -> 126
+         postnr  = as.numeric(sub(".*([0-9]{4}) .*", "\\1", zip)),      # de 4 cifre i zip: "Vivild, 8961 Allingåbro" -> 8961
+         by      = sub(".*[0-9]{4} ", "", zip),                          # teksten efter postnummeret: "Allingåbro"
+         kvmpris = pris / kvm,                                           # pris pr. kvadratmeter
+         by_slug = til_slug(by))                                         # samme format som DST-byerne, så de kan sættes sammen
+nrow(boliger)
+# 11.339 boliger, når tomme rækker og dubletter er fjernet
 
 mean(boliger$by_slug %in% byer$by_slug)
-# kun ca. 75 % af boligerne matcher direkte på bynavn
+# kun ca. 74 % af boligerne matcher direkte på bynavn
 
 boliger |>
   filter(!by_slug %in% byer$by_slug) |>   # de boliger, der ikke matcher
   count(by_slug, sort = TRUE) |>
   head(15)
-# mange er bydele i Hovedstadsområdet, fx valby, kastrup, hellerup og soeborg
+# mange har et retningssuffiks (koebenhavn-s, aarhus-c) eller er bydele i Hovedstadsområdet (kastrup, valby, hellerup)
 
 # Bydele i Hovedstadsområdet kobles via postnummer til DST's kommunedel (fx Hellerup -> Gentofte)
 # Det er en tilnærmelse, fordi postnumre ikke følger kommunegrænserne helt præcist
@@ -131,7 +151,7 @@ postnummer_til_kommunedel <- c(
   "2920" = "gentofte",        "2930" = "gentofte"
 )
 
-# Håndlavede aliasser, hvor Boligsidens navn afviger fra DST's
+# Håndlavede aliasser, hvor Newhomes' bynavn afviger fra DST's
 alias <- c("nykoebing-sj" = "nykoebing-s",
            "risskov"      = "aarhus",
            "hoejbjerg"    = "aarhus")
@@ -142,7 +162,7 @@ boliger <- boliger |>
     postnr >= 1000 & postnr <= 1799 ~ "koebenhavn",
     postnr >= 1800 & postnr <= 2000 ~ "frederiksberg",
     TRUE ~ unname(postnummer_til_kommunedel[as.character(postnr)])),   # resten slås op i listen ovenfor
-    uden_suffiks = sub("-[a-z]{1,2}$", "", by_slug),                       # "aarhus-c" bliver til "aarhus"
+    uden_suffiks = sub("-[a-z]{1,3}$", "", by_slug),                       # "aarhus-c" og "randers-soe" bliver til "aarhus" og "randers"
     match_slug = case_when(
       by_slug %in% names(alias)      ~ unname(alias[by_slug]),   # 1) alias
       !is.na(postnummer_by)          ~ postnummer_by,            # 2) postnummer i Hovedstadsområdet
@@ -156,7 +176,7 @@ boliger_med_bycat <- boliger |>
 
 sum(!is.na(boliger_med_bycat$bycat))
 nrow(boliger_med_bycat)
-# 12.463 af 13.838 boliger (90,1 %) har fået en bycat
+# 10.527 af 11.339 boliger (92,8 %) har fået en bycat
 
 boliger_med_bycat |>
   filter(is.na(bycat)) |>   # de boliger, der stadig ikke har en bycat
@@ -170,7 +190,7 @@ boliger_med_bycat |>
 # =====================================================================
 # De første 10 boliger med by, pris, kvadratmeterpris og bycat, sorteret efter by
 eksempel_boliger <- boliger_med_bycat |>
-  filter(!is.na(by), !is.na(bycat), grepl("^[a-zæøå]", by)) |>   # spring bynavne over, der starter med et tal
+  filter(!is.na(by), !is.na(bycat), !grepl("^[0-9]", by)) |>     # spring bynavne over, der starter med et tal
   select(by, pris, kvmpris, bycat) |>
   arrange(by) |>
   head(10) |>
@@ -196,7 +216,7 @@ pris_pr_bytype
 faktor <- pris_pr_bytype$median_kvmpris[pris_pr_bytype$bycat == "storby"] /
   pris_pr_bytype$median_kvmpris[pris_pr_bytype$bycat == "landsby"]
 faktor
-# ca. 3,9
+# ca. 3,8
 
 pris_pr_bytype |>
   ggplot(aes(x = bycat, y = median_kvmpris, fill = bycat)) +
@@ -209,8 +229,8 @@ pris_pr_bytype |>
                          " gange så meget pr. m² som i landsbyer"),
        subtitle = "Median kvadratmeterpris efter bytype. Landsby og lille by ligger på samme niveau.",
        x = NULL, y = "Median pris pr. m² (kr.)",
-       caption  = paste0("Kilde: Boligsiden og Danmarks Statistik (BY1). ",
-                         format(nrow(boliger_til_plot), big.mark = "."), " boliger.")) +
+       caption  = paste0("Kilde: Newhomes og Danmarks Statistik (BY1). ",
+                         format(nrow(boliger_til_plot), big.mark = ".", decimal.mark = ","), " boliger.")) +
   theme_minimal(base_size = 13) +
   theme(legend.position = "none", plot.title = element_text(face = "bold"))
 
@@ -233,7 +253,7 @@ top3_pr_bytype <- boliger_til_plot |>
             `Median pris pr. m²` = kroner(median_kvmpris),
             `Antal boliger`      = antal)
 top3_pr_bytype
-# Storby: Frederiksberg (ca. 68.000 kr.), København (ca. 58.000 kr.) og Aarhus (ca. 41.000 kr.)
+# Storby: Frederiksberg (ca. 66.600 kr.), København (ca. 58.200 kr.) og Aarhus (ca. 41.900 kr.)
 
 
 # =====================================================================
@@ -472,7 +492,7 @@ forv1_fra_2000 <- forv1_kvartal |> filter(kvartal_dato >= as.Date("2000-01-01"))
 
 mean(forv1_fra_2000$F9)
 summary(forv1_fra_2000$F9)[c(1, 3, 4, 6)]   # minimum, median, gennemsnit og maksimum
-# min -44,43, median -8,00, gennemsnit -10,80 og maks -0,03: aldrig positiv, selv i de bedste kvartaler
+# min -44,43, median -8,05, gennemsnit -10,84 og maks -0,03: aldrig positiv, selv i de bedste kvartaler
 
 forv1_fra_2000 |>
   ggplot(aes(x = kvartal_dato, y = F9)) +
@@ -625,10 +645,10 @@ eurostat_soegning[, c("code", "title")]
 get_eurostat_dic("na_item") |> filter(code_name == "P31_S14")                           # husholdningernes forbrugsudgift
 get_eurostat_dic("unit")    |> filter(code_name %in% c("CLV20_MEUR", "CLV_PCH_SM"))     # kædede 2020-priser
 
-# Data er hentet via API'et og gemt som CSV
-eurostat_data <- read.csv("Eurostat_namq_10_fcs.csv", stringsAsFactors = FALSE) |>
-  mutate(time = as.Date(time)) |>
-  filter(geo %in% lande)
+# Data hentes via Eurostats API: husholdningernes forbrug, kædede 2020-priser, sæsonkorrigeret
+eurostat_data <- get_eurostat("namq_10_fcs",
+                              filters = list(geo = lande, na_item = "P31_S14", unit = "CLV20_MEUR", s_adj = "SCA"),
+                              time_format = "date")   # time bliver en rigtig dato, fx 2020-04-01
 table(eurostat_data$geo)
 
 # Landenavne til visning (koden er nøglen, navnet bruges kun i tabeller og grafer)
@@ -680,7 +700,7 @@ gennemsnit_pr_land <- eurostat_vaekst |>
   summarise(gennemsnit = mean(vaekst)) |>
   arrange(desc(gennemsnit))
 gennemsnit_pr_land
-# Sverige 2,22 %, Spanien 1,60 % ... Italien laveste med 0,39 %
+# Sverige 2,22 %, Spanien 1,60 % ... Italien laveste med 0,41 %
 
 gennemsnit_pr_land |>
   mutate(land = factor(land_med_kode(geo), levels = rev(land_med_kode(geo)))) |>   # højeste øverst
@@ -699,35 +719,18 @@ gennemsnit_pr_land |>
 # =====================================================================
 # Opgave 5.3: Coronakrisen som outlier
 # =====================================================================
-# Corona ramte landene forskelligt, så vi finder hvert lands egen Coronaperiode:
-# Et kvartal i 2020K1-2022K2 er påvirket, hvis væksten afviger mere end 2 standardafvigelser
-# fra landets gennemsnit i 2000-2019. Perioden går fra første til sidste påvirkede kvartal.
-graense <- 2
-
-corona_perioder <- eurostat_vaekst |>
-  group_by(geo) |>
-  mutate(gennemsnit_foer = mean(vaekst[time < as.Date("2020-01-01")]),   # gennemsnit før Corona
-         spredning_foer  = sd(vaekst[time < as.Date("2020-01-01")]),     # standardafvigelse før Corona
-         afvigelse       = abs(vaekst - gennemsnit_foer) / spredning_foer,
-         paavirket       = time >= as.Date("2020-01-01") & time <= as.Date("2022-04-01") & afvigelse > graense) |>
-  filter(paavirket) |>
-  summarise(corona_start = min(time), corona_slut = max(time))
-corona_perioder
-# Danmark har den korteste Coronaperiode og starter først i 2. kvartal 2020
-
-# Markér Coronakvartalerne og regn gennemsnittet med og uden dem
+# Coronakrisen = 2020K1 til 2021K4 for alle lande: faldet i 2020 og genopretningen i 2021.
+# Begge år skal fjernes, fordi væksten i 2021 er kunstigt høj, når den sammenlignes med det lave 2020.
 effekt_af_corona <- eurostat_vaekst |>
-  left_join(corona_perioder, by = "geo") |>
-  mutate(i_corona = !is.na(corona_start) & time >= corona_start & time <= corona_slut) |>
+  mutate(corona = time >= as.Date("2020-01-01") & time <= as.Date("2021-10-01")) |>   # TRUE i Coronakvartalerne
   group_by(geo) |>
-  summarise(med_corona     = mean(vaekst),
-            uden_corona    = mean(vaekst[!i_corona]),
-            antal_kvartaler = sum(i_corona)) |>
-  mutate(forskel = uden_corona - med_corona,
+  summarise(med_corona  = mean(vaekst),                 # gennemsnit med alle kvartaler
+            uden_corona = mean(vaekst[!corona])) |>     # gennemsnit uden Coronakvartalerne
+  mutate(forskel = uden_corona - med_corona,            # hvor meget Corona trak gennemsnittet ned
          land    = landenavn[geo]) |>
   arrange(desc(forskel))
 effekt_af_corona
-# Spanien: størst effekt, +0,18 procentpoint (fra 1,60 til 1,79 %)
+# Spanien: størst effekt, +0,38 procentpoint (fra 1,60 til 1,98 %). Danmark: næsten ingen effekt (-0,02)
 
 effekt_af_corona |>
   pivot_longer(c(med_corona, uden_corona), names_to = "type", values_to = "gennemsnit") |>
@@ -737,7 +740,7 @@ effekt_af_corona |>
   geom_col(position = position_dodge(width = 0.8), width = 0.75) +
   scale_fill_manual(values = c("Med Corona" = "#9ECAE1", "Uden Corona" = "#08519C")) +
   labs(title = paste0("Uden Corona stiger gennemsnittet mest i ", effekt_af_corona$land[1], " (", effekt_af_corona$geo[1], ")"),
-       subtitle = "Gennemsnitlig årlig realvækst pr. kvartal med og uden hvert lands Coronaperiode, 2000K1 til dags dato",
+       subtitle = "Gennemsnitlig årlig realvækst pr. kvartal med og uden Coronakrisen (2020K1-2021K4), 2000K1 til dags dato",
        x = "Landekode", y = "Årlig realvækst (%)", fill = NULL,
        caption = "Kilde: Eurostat, tabel namq_10_fcs. Plot: genereret i RStudio") +
   theme_minimal(base_size = 12) +
@@ -753,7 +756,7 @@ gennemsnit_fra_2020 <- eurostat_vaekst |>
   summarise(gennemsnit = mean(vaekst)) |>
   arrange(gennemsnit)
 gennemsnit_fra_2020
-# Østrig laveste med 0,53 %, Spanien højeste med 2,00 %
+# Østrig laveste med 0,69 %, Spanien højeste med 2,00 %
 
 gennemsnit_fra_2020 |>
   mutate(land = factor(land_med_kode(geo), levels = rev(land_med_kode(geo)))) |>
@@ -767,18 +770,3 @@ gennemsnit_fra_2020 |>
        caption = "Kilde: Eurostat, tabel namq_10_fcs. Plot: genereret i RStudio") +
   theme_minimal(base_size = 13) +
   theme(legend.position = "none", plot.title = element_text(face = "bold"))
-
-# Fald i 2020 og genopretning i 2021 for hvert land
-genopretning <- eurostat_vaekst |>
-  mutate(aar = format(time, "%Y")) |>
-  group_by(geo) |>
-  summarise(gennemsnit_2020 = mean(vaekst[aar == "2020"]),
-            laveste_2020    = min(vaekst[aar == "2020"]),
-            laveste_kvartal = kvartal_tekst(time[aar == "2020"][which.min(vaekst[aar == "2020"])]),
-            gennemsnit_2021 = mean(vaekst[aar == "2021"]),
-            hoejeste_2021   = max(vaekst[aar == "2021"]),
-            hoejeste_kvartal = kvartal_tekst(time[aar == "2021"][which.max(vaekst[aar == "2021"])])) |>
-  mutate(land = landenavn[geo])
-genopretning
-# Alle lande har det laveste kvartal i 2020 K2 og det højeste i 2021 K2 (basiseffekt).
-# Spanien: -29,0 % og +27,4 %. Østrig: -15,5 % og +10,8 %.
